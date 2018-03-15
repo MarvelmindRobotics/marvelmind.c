@@ -20,15 +20,15 @@ If you want to build a project for MS Windows, you may use integrated developmen
 
 You may specify another serial port as command line argument. For example:
 
- *./marvelmind_example /dev/ttyACM2*
+ *./marvelmind_c /dev/ttyACM2*
 
 or for Microsoft Windows:
 
- *marvelmind_example.exe COM4*
+ *marvelmind_c.exe COM4*
 
 Use prefix \\.\ if serial port number is bigger than 9:
 
- *marvelmind_example.exe \\.\COM10*
+ *marvelmind_c.exe \\.\COM10*
 
 ### Using the library ###
 
