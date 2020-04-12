@@ -72,6 +72,9 @@ struct RawDistances
     uint8_t address_hedge;
     struct RawDistanceItem distances[4];
 
+    uint32_t timestamp;
+    uint16_t timeShift;
+
     bool updated;
 };
 
@@ -87,6 +90,22 @@ struct StationaryBeaconsPositions
 {
     uint8_t numBeacons;
     struct StationaryBeaconPosition beacons[MAX_STATIONARY_BEACONS];
+
+    bool updated;
+};
+
+struct TelemetryData
+{
+    uint16_t vbat_mv;
+    int8_t rssi_dbm;
+
+    bool updated;
+};
+
+struct QualityData
+{
+    uint8_t address;
+    uint8_t quality_per;
 
     bool updated;
 };
@@ -113,6 +132,9 @@ struct MarvelmindHedge
     struct FusionIMUValue fusionIMU;
 
     struct RawDistances rawDistances;
+
+    struct TelemetryData telemetry;
+    struct QualityData quality;
 
 // verbose flag which activate console output
 //		default: False
@@ -148,6 +170,9 @@ struct MarvelmindHedge
 #define IMU_RAW_DATAGRAM_ID 0x0003
 #define BEACON_RAW_DISTANCE_DATAGRAM_ID 0x0004
 #define IMU_FUSION_DATAGRAM_ID 0x0005
+#define TELEMETRY_DATAGRAM_ID 0x0006
+#define QUALITY_DATAGRAM_ID 0x0007
+#define WAYPOINT_DATAGRAM_ID 0x0201
 
 struct MarvelmindHedge * createMarvelmindHedge ();
 void destroyMarvelmindHedge (struct MarvelmindHedge * hedge);
@@ -178,6 +203,15 @@ bool getFusionIMUFromMarvelmindHedge(struct MarvelmindHedge * hedge,
 void printFusionIMUFromMarvelmindHedge(struct MarvelmindHedge * hedge,
                                       bool onlyNew);
 
+bool getTelemetryFromMarvelmindHedge(struct MarvelmindHedge * hedge,
+                                     struct TelemetryData *telemetry);
+void printTelemetryFromMarvelmindHedge(struct MarvelmindHedge * hedge,
+                                      bool onlyNew);
+
+bool getQualityFromMarvelmindHedge(struct MarvelmindHedge * hedge,
+                                     struct QualityData *quality);
+void printQualityFromMarvelmindHedge(struct MarvelmindHedge * hedge,
+                                      bool onlyNew);
 
 void stopMarvelmindHedge (struct MarvelmindHedge * hedge);
 

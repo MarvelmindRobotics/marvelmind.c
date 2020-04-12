@@ -136,6 +136,10 @@ int main (int argc, char *argv[])
         printRawIMUFromMarvelmindHedge(hedge, true);
 
         printFusionIMUFromMarvelmindHedge(hedge, true);
+
+        printTelemetryFromMarvelmindHedge(hedge, true);
+
+        printQualityFromMarvelmindHedge(hedge, true);
     }
 
     // Exit

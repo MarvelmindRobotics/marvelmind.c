@@ -56,7 +56,7 @@ uint16_t CalcCrcModbus_(uint8_t * buf, int len)
 HANDLE OpenSerialPort_ (const char * portFileName, uint32_t baudrate,
                         bool verbose)
 {
-    HANDLE ttyHandle = CreateFile( TEXT(portFileName), GENERIC_READ, 0,
+    HANDLE ttyHandle = CreateFile( portFileName, GENERIC_READ, 0,
                                    NULL, OPEN_EXISTING, 0/*FILE_FLAG_OVERLAPPED*/, NULL);
     if (ttyHandle==INVALID_HANDLE_VALUE)
     {
@@ -220,6 +220,14 @@ enum
 };
 
 //////////////////////////////////////////////////////////////////////////////
+
+static uint16_t get_uint16(uint8_t *buffer)
+{
+	uint16_t res= buffer[0] |
+                 (((uint16_t ) buffer[1])<<8);
+
+    return res;
+}
 
 static int16_t get_int16(uint8_t *buffer)
 {
@@ -511,7 +519,37 @@ static void process_raw_distances_datagram(struct MarvelmindHedge * hedge, uint8
 	   ofs+= 6;
 	}
 
+	hedge->rawDistances.timestamp= get_uint32(&dataBuf[25]);
+	hedge->rawDistances.timeShift= get_uint16(&dataBuf[29]);
+
     hedge->rawDistances.updated= true;
+}
+
+static void process_telemetry_datagram(struct MarvelmindHedge * hedge, uint8_t *buffer)
+{uint8_t *dataBuf= &buffer[5];
+
+   hedge->telemetry.vbat_mv= get_uint16(&dataBuf[0]);
+   hedge->telemetry.rssi_dbm= (int8_t) dataBuf[2];
+
+   hedge->telemetry.updated= true;
+}
+
+static void process_quality_datagram(struct MarvelmindHedge * hedge, uint8_t *buffer)
+{uint8_t *dataBuf= &buffer[5];
+
+   hedge->quality.address= dataBuf[0];
+   hedge->quality.quality_per= dataBuf[1];
+
+   hedge->quality.updated= true;
+}
+
+static void process_waypoint_data(struct MarvelmindHedge * hedge, uint8_t *buffer)
+{uint8_t i;
+
+   for(i=0;i<16;i++) {
+    printf("%03d, ", buffer[i]);
+   }
+   printf("\n");
 }
 
 ////////////////////////
@@ -592,7 +630,7 @@ Marvelmind_Thread_ (void* param)
                         goodByte= (receivedChar == 0xff);
                         break;
                     case 1:
-                        goodByte= (receivedChar == 0x47);
+                        goodByte= (receivedChar == 0x47) || (receivedChar == 0x4a);
                         break;
                     case 2:
                         goodByte= true;
@@ -605,7 +643,10 @@ Marvelmind_Thread_ (void* param)
                                     (dataId == BEACONS_POSITIONS_DATAGRAM_HIGHRES_ID) ||
                                     (dataId == IMU_RAW_DATAGRAM_ID) ||
                                     (dataId == IMU_FUSION_DATAGRAM_ID) ||
-                                    (dataId == BEACON_RAW_DISTANCE_DATAGRAM_ID);
+                                    (dataId == BEACON_RAW_DISTANCE_DATAGRAM_ID) ||
+                                    (dataId == TELEMETRY_DATAGRAM_ID) ||
+                                    (dataId == QUALITY_DATAGRAM_ID) ||
+                                    (dataId == WAYPOINT_DATAGRAM_ID);
                         break;
                     case 4:
                         switch(dataId )
@@ -628,6 +669,15 @@ Marvelmind_Thread_ (void* param)
                                 break;
                             case BEACON_RAW_DISTANCE_DATAGRAM_ID:
                                 goodByte= (receivedChar == 0x20);
+                                break;
+                            case TELEMETRY_DATAGRAM_ID:
+                                goodByte= (receivedChar == 0x10);
+                                break;
+                            case QUALITY_DATAGRAM_ID:
+                                goodByte= (receivedChar == 0x10);
+                                break;
+                            case WAYPOINT_DATAGRAM_ID:
+                                goodByte= (receivedChar == 0x0c);
                                 break;
                         }
                         if (goodByte)
@@ -685,6 +735,15 @@ Marvelmind_Thread_ (void* param)
                             case BEACON_RAW_DISTANCE_DATAGRAM_ID:
                                 process_raw_distances_datagram(hedge, input_buffer);
                                 break;
+                            case TELEMETRY_DATAGRAM_ID:
+                                process_telemetry_datagram(hedge, input_buffer);
+                                break;
+                            case QUALITY_DATAGRAM_ID:
+                                process_quality_datagram(hedge, input_buffer);
+                                break;
+                            case WAYPOINT_DATAGRAM_ID:
+                                process_waypoint_data(hedge, input_buffer);
+                                break;
                         }
 #ifdef WIN32
                         LeaveCriticalSection(&hedge->lock_);
@@ -727,7 +786,7 @@ struct MarvelmindHedge * createMarvelmindHedge ()
     if (hedge)
     {
         hedge->ttyFileName=DEFAULT_TTY_FILENAME;
-        hedge->baudRate=9600;
+        hedge->baudRate=9600;//115200;//9600;
         hedge->positionBuffer=NULL;
         hedge->verbose=false;
         hedge->receiveDataCallback=NULL;
@@ -771,6 +830,9 @@ void startMarvelmindHedge (struct MarvelmindHedge * hedge)
     }
     hedge->positionsBeacons.numBeacons= 0;
     hedge->positionsBeacons.updated= false;
+
+    hedge->telemetry.updated= false;
+    hedge->quality.updated= false;
 
 #ifdef WIN32
     _beginthread (Marvelmind_Thread_, 0, hedge);
@@ -1008,10 +1070,13 @@ void printRawDistancesFromMarvelmindHedge(struct MarvelmindHedge * hedge,
 		  if (rawDistances.distances[i].address_beacon != 0)
 		  {
 		      d_m= rawDistances.distances[i].distance/1000.0;
-			  printf("Raw distance: %02d ==> %02d,  Distance= %.3f \n",
+			  printf("Raw distance: %02d ==> %02d,  Distance= %.3f, Timestamp= %d, Time shift= %d \n",
 				(int) rawDistances.address_hedge,
 				(int) rawDistances.distances[i].address_beacon,
-				(float) d_m);
+                (float) d_m,
+                (int) rawDistances.timestamp,
+                (int) rawDistances.timeShift
+                );
 		  }
 		}
 
@@ -1118,6 +1183,77 @@ void printFusionIMUFromMarvelmindHedge(struct MarvelmindHedge * hedge,
 				(float) ax, (float) ay, (float) az);
 
        hedge->fusionIMU.updated= false;
+    }
+}
+
+//////
+
+bool getTelemetryFromMarvelmindHedge(struct MarvelmindHedge * hedge,
+                                     struct TelemetryData *telemetry)
+{
+#ifdef WIN32
+    EnterCriticalSection(&hedge->lock_);
+#else
+    pthread_mutex_lock (&hedge->lock_);
+#endif
+
+    *telemetry= hedge->telemetry;
+
+#ifdef WIN32
+    LeaveCriticalSection(&hedge->lock_);
+#else
+    pthread_mutex_unlock (&hedge->lock_);
+#endif
+
+    return true;
+}
+
+void printTelemetryFromMarvelmindHedge(struct MarvelmindHedge * hedge,
+                                       bool onlyNew)
+{struct TelemetryData telemetry;
+   getTelemetryFromMarvelmindHedge(hedge, &telemetry);
+
+   if (telemetry.updated || (!onlyNew))
+    {
+        printf("Telemetry: Vbat= %.3f V,    RSSI= %d dBm \n",
+				(float) (telemetry.vbat_mv/1000.0f), (int) telemetry.rssi_dbm);
+
+        hedge->telemetry.updated= false;
+    }
+}
+
+//////////
+
+bool getQualityFromMarvelmindHedge(struct MarvelmindHedge * hedge,
+                                   struct QualityData *quality)
+{
+#ifdef WIN32
+    EnterCriticalSection(&hedge->lock_);
+#else
+    pthread_mutex_lock (&hedge->lock_);
+#endif
+
+    *quality= hedge->quality;
+
+#ifdef WIN32
+    LeaveCriticalSection(&hedge->lock_);
+#else
+    pthread_mutex_unlock (&hedge->lock_);
+#endif
+
+    return true;
+}
+
+void printQualityFromMarvelmindHedge(struct MarvelmindHedge * hedge,
+                                       bool onlyNew)
+{struct QualityData quality;
+   getQualityFromMarvelmindHedge(hedge, &quality);
+
+   if (quality.updated || (!onlyNew))
+    {
+        printf("Quality: Address= %d,  Q= %d %% \n", (int) quality.address, (int) quality.quality_per);
+
+        hedge->quality.updated= false;
     }
 }
 
