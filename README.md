@@ -57,6 +57,11 @@ Mobile beacon transmits raw IMU data only if IMU hardware is exist in the beacon
 * Call *getFusionIMUFromMarvelmindHedge* to get IMU fusion data from mobile beacon. This includes IMU fusion position of the mobile beacon, rotation quaternion, 3D velocity and acceleration. Or call *printFusionIMUFromMarvelmindHedge* to print it on console output. 
 Mobile beacon transmits IMU fusion data only if IMU hardware is exist in the beacon and ‘Processed IMU data’ option is enabled in ‘Interfaces’ section of mobile beacon’s settings in dashboard.
 
+* Call *getTelemetryFromMarvelmindHedge* to get telemetry data from mobile beacon. This includes radio signal strength (RSSI) value for the mobile beacon and battery voltage. Or call *printTelemetryFromMarvelmindHedge* to get and print these data to console. 
+Mobile beacon transmits telemetry data only if ‘Telemetry stream’ option is enabled in ‘Interfaces’ section of mobile beacon’s settings in dashboard.
+* Call *getQualityFromMarvelmindHedge* to get quality of positioning from mobile beacon. Or call *printQualityFromMarvelmindHedge* to get and print the quality to console. 
+Mobile beacon transmits quality data only if ‘Quality data stream’ option is enabled in ‘Interfaces’ section of mobile beacon’s settings in dashboard.
+
 
 * After usage call *stopMarvelmindHedge* to stop the collecting thread.
 
