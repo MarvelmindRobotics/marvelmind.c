@@ -199,7 +199,9 @@ int OpenSerialPort_ (const char * portFileName, uint32_t baudrate, bool verbose)
     ttyCtrl.c_cc[VTIME]     =   30; // 3 seconds read timeout
     ttyCtrl.c_cflag     |=  CREAD | CLOCAL; // turn on READ & ignore ctrl lines
     ttyCtrl.c_iflag     &=  ~(IXON | IXOFF | IXANY);// turn off s/w flow ctrl
+    ttyCtrl.c_iflag     &=  ~(BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL);
     ttyCtrl.c_lflag     &=  ~(ICANON | ECHO | ECHOE | ISIG); // make raw
+    ttyCtrl.c_lflag     &= (ECHONL | IEXTEN);  
     ttyCtrl.c_oflag     &=  ~OPOST; // make raw
     tcflush(ttyHandle, TCIFLUSH ); // Flush port
     if (tcsetattr (ttyHandle, TCSANOW, &ttyCtrl) != 0)
