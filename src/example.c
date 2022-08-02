@@ -1,7 +1,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdbool.h>
-#ifdef WIN32
+#if defined(WIN32) || defined(_WIN64)
 #include <windows.h>
 #else
 #include <fcntl.h>
@@ -9,12 +9,12 @@
 #include <signal.h>
 #include <semaphore.h>
 #include <time.h>
-#endif // WIN32
+#endif 
 #include "marvelmind.h"
 
 bool terminateProgram=false;
 
-#ifdef WIN32
+#if defined(WIN32) || defined(_WIN64)
 BOOL CtrlHandler( DWORD fdwCtrlType )
 {
     if ((fdwCtrlType==CTRL_C_EVENT ||
@@ -36,7 +36,7 @@ void CtrlHandler(int signum)
 }
 #endif
 
-#ifdef WIN32
+#if defined(WIN32) || defined(_WIN64)
 void sleep(unsigned int seconds)
 {
     Sleep (seconds*1000);
@@ -44,7 +44,7 @@ void sleep(unsigned int seconds)
 #endif
 
 
-#ifdef WIN32
+#if defined(WIN32) || defined(_WIN64)
 HANDLE ghSemaphore;
 DWORD dwSemWaitResult;
 void semCallback()
@@ -64,12 +64,29 @@ void semCallback()
 }
 #endif // WIN32
 
+#ifdef _WIN64
+const wchar_t* GetWC(const char* c)
+{
+    const size_t cSize = strlen(c) + 1;
+    wchar_t* wc =  malloc(sizeof(wchar_t)*cSize);
+    mbstowcs(wc, c, cSize);
+
+    return wc;
+}
+#endif
+
 int main (int argc, char *argv[])
 {
     // get port name from command line arguments (if specified)
+    #ifdef _WIN64
+    const wchar_t * ttyFileName;
+    if (argc == 2) ttyFileName = GetWC(argv[1]);
+    else ttyFileName = TEXT(DEFAULT_TTY_FILENAME);
+    #else
     const char * ttyFileName;
-    if (argc==2) ttyFileName=argv[1];
-    else ttyFileName=DEFAULT_TTY_FILENAME;
+    if (argc == 2) ttyFileName = argv[1];
+    else ttyFileName = DEFAULT_TTY_FILENAME;
+    #endif
 
     // Init
     struct MarvelmindHedge * hedge=createMarvelmindHedge ();
@@ -84,14 +101,14 @@ int main (int argc, char *argv[])
     startMarvelmindHedge (hedge);
 
     // Set Ctrl-C handler
-#ifdef WIN32
+#if defined(WIN32) || defined(_WIN64)
     SetConsoleCtrlHandler( (PHANDLER_ROUTINE) CtrlHandler, TRUE );
 #else
     signal (SIGINT, CtrlHandler);
     signal (SIGQUIT, CtrlHandler);
 #endif
 
-#ifdef WIN32
+#if defined(WIN32) || defined(_WIN64)
     ghSemaphore = CreateSemaphore(
         NULL, // default security attributes
         10,  // initial count
@@ -111,7 +128,7 @@ int main (int argc, char *argv[])
     while ((!terminateProgram) && (!hedge->terminationRequired))
     {
         //sleep (3);
-        #ifdef WIN32
+        #if defined(WIN32) || defined(_WIN64)
         dwSemWaitResult = WaitForSingleObject(
             ghSemaphore,   // handle to semaphore
             1000); // time-out interval
@@ -140,6 +157,7 @@ int main (int argc, char *argv[])
         printTelemetryFromMarvelmindHedge(hedge, true);
 
         printQualityFromMarvelmindHedge(hedge, true);
+
     }
 
     // Exit

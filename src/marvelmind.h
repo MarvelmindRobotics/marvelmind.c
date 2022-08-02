@@ -3,13 +3,39 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+// ----- Required for Visual Studio
+#if defined(WIN32) || defined(_WIN64)
+#ifdef _CRT_SECURE_NO_WARNINGS
+#undef _CRT_SECURE_NO_WARNINGS
+#endif
+#define _CRT_SECURE_NO_WARNINGS 1
+#pragma warning(disable:4996)
+#endif
+// ----- 
+
 #define DATA_INPUT_SEMAPHORE "/mm_data_input_semaphore"
+
+#ifdef _WIN64
+#define SERIAL_FILENAME const wchar_t*
+#else
+#define SERIAL_FILENAME const char*
+#endif
+
+typedef union {
+  uint32_t timestamp32;
+  int64_t timestamp64;
+} TimestampOpt;
 
 struct PositionValue
 {
     uint8_t address;
-    uint32_t timestamp;
+
+    TimestampOpt timestamp;
+    bool realTime;
+
     int32_t x, y, z;// coordinates in millimeters
+
+    uint8_t flags;
 
     double angle;
 
@@ -33,7 +59,8 @@ struct RawIMUValue
     int16_t compass_y;
     int16_t compass_z;
 
-    uint32_t timestamp;
+    TimestampOpt timestamp;
+    bool realTime;
 
     bool updated;
 };
@@ -57,7 +84,8 @@ struct FusionIMUValue
     int16_t ay;
     int16_t az;// acceleration, mm/s^2
 
-    uint32_t timestamp;
+    TimestampOpt timestamp;
+    bool realTime;
 
     bool updated;
 };
@@ -72,7 +100,9 @@ struct RawDistances
     uint8_t address_hedge;
     struct RawDistanceItem distances[4];
 
-    uint32_t timestamp;
+    TimestampOpt timestamp;
+    bool realTime;
+
     uint16_t timeShift;
 
     bool updated;
@@ -110,14 +140,14 @@ struct QualityData
     bool updated;
 };
 
-#define MAX_BUFFERED_POSITIONS 3
+#define MAX_BUFFERED_POSITIONS 1
 struct MarvelmindHedge
 {
 // serial port device name (physical or USB/virtual). It should be provided as
 // an argument:
 // /dev/ttyACM0 - typical for Linux / Raspberry Pi
 // /dev/tty.usbmodem1451 - typical for Mac OS X
-    const char * ttyFileName;
+    SERIAL_FILENAME ttyFileName;
 
 // Baud rate. Should be match to baudrate of hedgehog-beacon
 // default: 9600
@@ -135,6 +165,8 @@ struct MarvelmindHedge
 
     struct TelemetryData telemetry;
     struct QualityData quality;
+
+    int timeOffset;
 
 // verbose flag which activate console output
 //		default: False
@@ -154,7 +186,7 @@ struct MarvelmindHedge
     uint8_t lastValuesCount_;
     uint8_t lastValues_next;
     bool haveNewValues_;
-#ifdef WIN32
+#if defined(WIN32) || defined(_WIN64)
     HANDLE thread_;
     CRITICAL_SECTION lock_;
 #else
@@ -172,6 +204,10 @@ struct MarvelmindHedge
 #define IMU_FUSION_DATAGRAM_ID 0x0005
 #define TELEMETRY_DATAGRAM_ID 0x0006
 #define QUALITY_DATAGRAM_ID 0x0007
+#define NT_POSITION_DATAGRAM_HIGHRES_ID 0x0081
+#define NT_IMU_RAW_DATAGRAM_ID 0x0083
+#define NT_BEACON_RAW_DISTANCE_DATAGRAM_ID 0x0084
+#define NT_IMU_FUSION_DATAGRAM_ID 0x0085
 #define WAYPOINT_DATAGRAM_ID 0x0201
 
 struct MarvelmindHedge * createMarvelmindHedge ();
@@ -215,7 +251,7 @@ void printQualityFromMarvelmindHedge(struct MarvelmindHedge * hedge,
 
 void stopMarvelmindHedge (struct MarvelmindHedge * hedge);
 
-#ifdef WIN32
+#if defined(WIN32) || defined(_WIN64)
 #define DEFAULT_TTY_FILENAME "\\\\.\\COM3"
 #else
 #define DEFAULT_TTY_FILENAME "/dev/ttyACM0"

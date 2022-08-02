@@ -1,7 +1,8 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
-#ifdef WIN32
+#include <time.h>
+#if defined(WIN32) || defined(_WIN64)
 #include <windows.h>
 #include <process.h>
 #else
@@ -41,7 +42,7 @@ uint16_t CalcCrcModbus_(uint8_t * buf, int len)
     return crc;
 }
 
-#ifdef WIN32
+#if defined(WIN32) || defined(_WIN64)
 #define SERIAL_PORT_HANDLE HANDLE
 #define PORT_NOT_OPENED INVALID_HANDLE_VALUE
 //////////////////////////////////////////////////////////////////////////////
@@ -53,11 +54,17 @@ uint16_t CalcCrcModbus_(uint8_t * buf, int len)
 // returncode: valid handle if port is successfully opened or
 //             INVALID_HANDLE_VALUE on error
 //////////////////////////////////////////////////////////////////////////////
-HANDLE OpenSerialPort_ (const char * portFileName, uint32_t baudrate,
+HANDLE OpenSerialPort_ (SERIAL_FILENAME portFileName, uint32_t baudrate,
                         bool verbose)
 {
-    HANDLE ttyHandle = CreateFile( portFileName, GENERIC_READ, 0,
+    #ifdef _WIN64
+    HANDLE ttyHandle = CreateFileW( portFileName, GENERIC_READ, 0,
                                    NULL, OPEN_EXISTING, 0/*FILE_FLAG_OVERLAPPED*/, NULL);
+    #else
+    HANDLE ttyHandle = CreateFileA(portFileName, GENERIC_READ, 0,
+        NULL, OPEN_EXISTING, 0/*FILE_FLAG_OVERLAPPED*/, NULL);
+    #endif
+
     if (ttyHandle==INVALID_HANDLE_VALUE)
     {
         if (verbose)
@@ -199,9 +206,7 @@ int OpenSerialPort_ (const char * portFileName, uint32_t baudrate, bool verbose)
     ttyCtrl.c_cc[VTIME]     =   30; // 3 seconds read timeout
     ttyCtrl.c_cflag     |=  CREAD | CLOCAL; // turn on READ & ignore ctrl lines
     ttyCtrl.c_iflag     &=  ~(IXON | IXOFF | IXANY);// turn off s/w flow ctrl
-    ttyCtrl.c_iflag     &=  ~(BRKINT | PARMRK | ISTRIP | INLCR | IGNCR | ICRNL);
     ttyCtrl.c_lflag     &=  ~(ICANON | ECHO | ECHOE | ISIG); // make raw
-    ttyCtrl.c_lflag     &= (ECHONL | IEXTEN);  
     ttyCtrl.c_oflag     &=  ~OPOST; // make raw
     tcflush(ttyHandle, TCIFLUSH ); // Flush port
     if (tcsetattr (ttyHandle, TCSANOW, &ttyCtrl) != 0)
@@ -288,11 +293,12 @@ static struct PositionValue process_position_datagram(struct MarvelmindHedge * h
 
     hedge->positionBuffer[ind].address=
         buffer[16];
-    hedge->positionBuffer[ind].timestamp=
+    hedge->positionBuffer[ind].timestamp.timestamp32=
         buffer[5] |
         (((uint32_t ) buffer[6])<<8) |
         (((uint32_t ) buffer[7])<<16) |
         (((uint32_t ) buffer[8])<<24);
+    hedge->positionBuffer[ind].realTime= false;
 
     int16_t vx= buffer[9] |
                 (((uint16_t ) buffer[10])<<8);
@@ -306,6 +312,8 @@ static struct PositionValue process_position_datagram(struct MarvelmindHedge * h
                 (((uint16_t ) buffer[14])<<8);
     hedge->positionBuffer[ind].z= vz*10;// millimeters
 
+    hedge->positionBuffer[ind].flags= buffer[15];
+
     uint16_t vang= buffer[17] |
                    (((uint16_t ) buffer[18])<<8);
     hedge->positionBuffer[ind].angle= ((float) (vang & 0x0fff))/10.0f;
@@ -317,16 +325,9 @@ static struct PositionValue process_position_datagram(struct MarvelmindHedge * h
     return hedge->positionBuffer[ind];
 }
 
-static struct PositionValue process_position_highres_datagram(struct MarvelmindHedge * hedge, uint8_t *buffer)
-{uint8_t ind= hedge->lastValues_next;
-
+static struct PositionValue process_position_highres_datagram_main(struct MarvelmindHedge * hedge, uint8_t *buffer, uint8_t ind) {
     hedge->positionBuffer[ind].address=
         buffer[22];
-    hedge->positionBuffer[ind].timestamp=
-        buffer[5] |
-        (((uint32_t ) buffer[6])<<8) |
-        (((uint32_t ) buffer[7])<<16) |
-        (((uint32_t ) buffer[8])<<24);
 
     int32_t vx= buffer[9] |
                 (((uint32_t ) buffer[10])<<8) |
@@ -346,6 +347,8 @@ static struct PositionValue process_position_highres_datagram(struct MarvelmindH
                 (((uint32_t ) buffer[20])<<24);
     hedge->positionBuffer[ind].z= vz;
 
+    hedge->positionBuffer[ind].flags= buffer[21];
+
     uint16_t vang= buffer[23] |
                    (((uint16_t ) buffer[24])<<8);
     hedge->positionBuffer[ind].angle= ((float) (vang & 0x0fff))/10.0f;
@@ -355,6 +358,28 @@ static struct PositionValue process_position_highres_datagram(struct MarvelmindH
     ind= markPositionReady(hedge);
 
     return hedge->positionBuffer[ind];
+}
+
+static struct PositionValue process_position_highres_datagram(struct MarvelmindHedge * hedge, uint8_t *buffer)
+{uint8_t ind= hedge->lastValues_next;
+
+    hedge->positionBuffer[ind].timestamp.timestamp32=
+        buffer[5] |
+        (((uint32_t ) buffer[6])<<8) |
+        (((uint32_t ) buffer[7])<<16) |
+        (((uint32_t ) buffer[8])<<24);
+    hedge->positionBuffer[ind].realTime= false;
+
+    return process_position_highres_datagram_main(hedge, buffer, ind);
+}
+
+static struct PositionValue process_nt_position_highres_datagram(struct MarvelmindHedge * hedge, uint8_t *buffer)
+{uint8_t ind= hedge->lastValues_next;
+
+    memcpy(&hedge->positionBuffer[ind].timestamp, &buffer[5], 8);
+    hedge->positionBuffer[ind].realTime= true;
+
+    return process_position_highres_datagram_main(hedge, &buffer[4], ind);
 }
 
 static struct StationaryBeaconPosition *getOrAllocBeacon(struct MarvelmindHedge * hedge,uint8_t address)
@@ -460,7 +485,7 @@ static void process_beacons_positions_highres_datagram(struct MarvelmindHedge * 
     }
 }
 
-static void process_imu_raw_datagram(struct MarvelmindHedge * hedge, uint8_t *buffer)
+static void process_imu_raw_datagram_main(struct MarvelmindHedge * hedge, uint8_t *buffer)
 {uint8_t *dataBuf= &buffer[5];
 
     hedge->rawIMU.acc_x= get_int16(&dataBuf[0]);
@@ -477,17 +502,33 @@ static void process_imu_raw_datagram(struct MarvelmindHedge * hedge, uint8_t *bu
     hedge->rawIMU.compass_y= get_int16(&dataBuf[14]);
     hedge->rawIMU.compass_z= get_int16(&dataBuf[16]);
 
-    hedge->rawIMU.timestamp= get_uint32(&dataBuf[24]);
-
     hedge->rawIMU.updated= true;
 }
 
-static void process_imu_fusion_datagram(struct MarvelmindHedge * hedge, uint8_t *buffer)
+static void process_imu_raw_datagram(struct MarvelmindHedge * hedge, uint8_t *buffer)
+{uint8_t *dataBuf= &buffer[5];
+
+    process_imu_raw_datagram_main(hedge, buffer);
+
+    hedge->rawIMU.timestamp.timestamp32= get_uint32(&dataBuf[24]);
+    hedge->rawIMU.realTime= false;
+}
+
+static void process_nt_imu_raw_datagram(struct MarvelmindHedge * hedge, uint8_t *buffer)
+{uint8_t *dataBuf= &buffer[5];
+
+    process_imu_raw_datagram_main(hedge, buffer);
+
+    memcpy(&hedge->rawIMU.timestamp, &dataBuf[24], 8);
+    hedge->rawIMU.realTime= true;
+}
+
+static void process_imu_fusion_datagram_main(struct MarvelmindHedge * hedge, uint8_t *buffer)
 {uint8_t *dataBuf= &buffer[5];
 
     hedge->fusionIMU.x= get_int32(&dataBuf[0]);
-    hedge->fusionIMU.y= get_int16(&dataBuf[4]);
-    hedge->fusionIMU.z= get_int16(&dataBuf[8]);
+    hedge->fusionIMU.y= get_int32(&dataBuf[4]);
+    hedge->fusionIMU.z= get_int32(&dataBuf[8]);
 
     hedge->fusionIMU.qw= get_int16(&dataBuf[12]);
     hedge->fusionIMU.qx= get_int16(&dataBuf[14]);
@@ -502,12 +543,28 @@ static void process_imu_fusion_datagram(struct MarvelmindHedge * hedge, uint8_t 
     hedge->fusionIMU.ay= get_int16(&dataBuf[28]);
     hedge->fusionIMU.az= get_int16(&dataBuf[30]);
 
-    hedge->fusionIMU.timestamp= get_uint32(&dataBuf[34]);
-
     hedge->fusionIMU.updated= true;
 }
 
-static void process_raw_distances_datagram(struct MarvelmindHedge * hedge, uint8_t *buffer)
+static void process_imu_fusion_datagram(struct MarvelmindHedge * hedge, uint8_t *buffer)
+{uint8_t *dataBuf= &buffer[5];
+
+    process_imu_fusion_datagram_main(hedge, buffer);
+
+    hedge->fusionIMU.timestamp.timestamp32= get_uint32(&dataBuf[34]);
+    hedge->fusionIMU.realTime= false;
+}
+
+static void process_nt_imu_fusion_datagram(struct MarvelmindHedge * hedge, uint8_t *buffer)
+{uint8_t *dataBuf= &buffer[5];
+
+    process_imu_fusion_datagram_main(hedge, buffer);
+
+    memcpy(&hedge->fusionIMU.timestamp, &dataBuf[34], 8);
+    hedge->fusionIMU.realTime= true;
+}
+
+static void process_raw_distances_datagram_main(struct MarvelmindHedge * hedge, uint8_t *buffer)
 {uint8_t *dataBuf= &buffer[5];
  uint8_t ofs, i;
 
@@ -521,11 +578,31 @@ static void process_raw_distances_datagram(struct MarvelmindHedge * hedge, uint8
 	   ofs+= 6;
 	}
 
-	hedge->rawDistances.timestamp= get_uint32(&dataBuf[25]);
-	hedge->rawDistances.timeShift= get_uint16(&dataBuf[29]);
-
     hedge->rawDistances.updated= true;
 }
+
+static void process_raw_distances_datagram(struct MarvelmindHedge * hedge, uint8_t *buffer)
+{uint8_t *dataBuf= &buffer[5];
+
+    process_raw_distances_datagram_main(hedge, buffer);
+
+	hedge->rawDistances.timestamp.timestamp32= get_uint32(&dataBuf[25]);
+	hedge->rawDistances.realTime= false;
+
+	hedge->rawDistances.timeShift= get_uint16(&dataBuf[29]);
+}
+
+static void process_nt_raw_distances_datagram(struct MarvelmindHedge * hedge, uint8_t *buffer)
+{uint8_t *dataBuf= &buffer[5];
+
+    process_raw_distances_datagram_main(hedge, buffer);
+
+    memcpy(&hedge->rawDistances.timestamp, &dataBuf[25], 8);
+    hedge->rawDistances.realTime= true;
+
+	hedge->rawDistances.timeShift= get_uint16(&dataBuf[33]);
+}
+
 
 static void process_telemetry_datagram(struct MarvelmindHedge * hedge, uint8_t *buffer)
 {uint8_t *dataBuf= &buffer[5];
@@ -557,7 +634,7 @@ static void process_waypoint_data(struct MarvelmindHedge * hedge, uint8_t *buffe
 ////////////////////////
 
 void
-#ifndef WIN32
+#if (!defined(WIN32)) && (!defined(_WIN64))
 *
 #endif // WIN32
 Marvelmind_Thread_ (void* param)
@@ -568,7 +645,7 @@ Marvelmind_Thread_ (void* param)
     uint8_t recvState=RECV_HDR; // current state of receive data
     uint8_t nBytesInBlockReceived=0; // bytes received
     uint16_t dataId;
- #ifndef WIN32
+#if (!defined(WIN32)) && (!defined(_WIN64))
     struct pollfd fds[1];
     int pollrc;
  #endif
@@ -583,7 +660,7 @@ Marvelmind_Thread_ (void* param)
     {
         uint8_t receivedChar;
         bool readSuccessed=true;
-#ifdef WIN32
+#if defined(WIN32) || defined(_WIN64)
         DWORD nBytesRead;
         OVERLAPPED osReader = {0};
 
@@ -648,7 +725,11 @@ Marvelmind_Thread_ (void* param)
                                     (dataId == BEACON_RAW_DISTANCE_DATAGRAM_ID) ||
                                     (dataId == TELEMETRY_DATAGRAM_ID) ||
                                     (dataId == QUALITY_DATAGRAM_ID) ||
-                                    (dataId == WAYPOINT_DATAGRAM_ID);
+                                    (dataId == WAYPOINT_DATAGRAM_ID) ||
+                                    (dataId == NT_POSITION_DATAGRAM_HIGHRES_ID) ||
+                                    (dataId == NT_IMU_RAW_DATAGRAM_ID) ||
+                                    (dataId == NT_BEACON_RAW_DISTANCE_DATAGRAM_ID) ||
+                                    (dataId == NT_IMU_FUSION_DATAGRAM_ID);
                         break;
                     case 4:
                         switch(dataId )
@@ -681,6 +762,12 @@ Marvelmind_Thread_ (void* param)
                             case WAYPOINT_DATAGRAM_ID:
                                 goodByte= (receivedChar == 0x0c);
                                 break;
+                            case NT_POSITION_DATAGRAM_HIGHRES_ID:
+                            case NT_IMU_RAW_DATAGRAM_ID:
+                            case NT_BEACON_RAW_DISTANCE_DATAGRAM_ID:
+                            case NT_IMU_FUSION_DATAGRAM_ID:
+                                goodByte= true;
+                                break;
                         }
                         if (goodByte)
                             recvState=RECV_DGRAM;
@@ -707,7 +794,7 @@ Marvelmind_Thread_ (void* param)
                         CalcCrcModbus_(input_buffer,nBytesInBlockReceived);
                     if (blockCrc==0)
                     {
-#ifdef WIN32
+#if defined(WIN32) || defined(_WIN64)
                         EnterCriticalSection(&hedge->lock_);
 #else
                         pthread_mutex_lock (&hedge->lock_);
@@ -725,17 +812,29 @@ Marvelmind_Thread_ (void* param)
                                 // add to positionBuffer
                                 curPosition= process_position_highres_datagram(hedge, input_buffer);
                                 break;
+                            case NT_POSITION_DATAGRAM_HIGHRES_ID:
+                                curPosition= process_nt_position_highres_datagram(hedge, input_buffer);
+                                break;
                             case BEACONS_POSITIONS_DATAGRAM_HIGHRES_ID:
                                 process_beacons_positions_highres_datagram(hedge, input_buffer);
                                 break;
                             case IMU_RAW_DATAGRAM_ID:
 								process_imu_raw_datagram(hedge, input_buffer);
                                 break;
+                            case NT_IMU_RAW_DATAGRAM_ID:
+                                process_nt_imu_raw_datagram(hedge, input_buffer);
+                                break;
                             case IMU_FUSION_DATAGRAM_ID:
                                 process_imu_fusion_datagram(hedge, input_buffer);
                                 break;
+                            case NT_IMU_FUSION_DATAGRAM_ID:
+                                process_nt_imu_fusion_datagram(hedge, input_buffer);
+                                break;
                             case BEACON_RAW_DISTANCE_DATAGRAM_ID:
                                 process_raw_distances_datagram(hedge, input_buffer);
+                                break;
+                            case NT_BEACON_RAW_DISTANCE_DATAGRAM_ID:
+                                process_nt_raw_distances_datagram(hedge, input_buffer);
                                 break;
                             case TELEMETRY_DATAGRAM_ID:
                                 process_telemetry_datagram(hedge, input_buffer);
@@ -747,7 +846,7 @@ Marvelmind_Thread_ (void* param)
                                 process_waypoint_data(hedge, input_buffer);
                                 break;
                         }
-#ifdef WIN32
+#if defined(WIN32) || defined(_WIN64)
                         LeaveCriticalSection(&hedge->lock_);
 #else
                         pthread_mutex_unlock (&hedge->lock_);
@@ -773,7 +872,7 @@ Marvelmind_Thread_ (void* param)
             }
         }
     }
-#ifndef WIN32
+#if (!defined(WIN32)) && (!defined(_WIN64))
     return NULL;
 #endif
 }
@@ -788,7 +887,7 @@ struct MarvelmindHedge * createMarvelmindHedge ()
     if (hedge)
     {
         hedge->ttyFileName=DEFAULT_TTY_FILENAME;
-        hedge->baudRate=9600;//115200;//9600;
+        hedge->baudRate=115200;//9600;//115200;//9600;
         hedge->positionBuffer=NULL;
         hedge->verbose=false;
         hedge->receiveDataCallback=NULL;
@@ -801,7 +900,7 @@ struct MarvelmindHedge * createMarvelmindHedge ()
         hedge->rawIMU.updated= false;
         hedge->fusionIMU.updated= false;
         hedge->rawDistances.updated= false;
-#ifdef WIN32
+#if defined(WIN32) || defined(_WIN64)
         InitializeCriticalSection(&hedge->lock_);
 #else
         pthread_mutex_init (&hedge->lock_, NULL);
@@ -814,6 +913,17 @@ struct MarvelmindHedge * createMarvelmindHedge ()
 //////////////////////////////////////////////////////////////////////////////
 // Initialize and start work thread
 //////////////////////////////////////////////////////////////////////////////
+
+static int timezone_offset() {
+    time_t zero = 0;
+    struct tm* lt = localtime( &zero );
+    if (lt == NULL) return 0;
+    //return 0;
+    //int unaligned = lt->tm_sec + ( lt->tm_min +  ( lt->tm_hour * 6 ) ) * 6;
+    int unaligned = lt->tm_sec + ( lt->tm_min + ( lt->tm_hour * 60 ) ) * 60;
+    return lt->tm_mon ? unaligned - 24*60*60 : unaligned;
+}
+
 void startMarvelmindHedge (struct MarvelmindHedge * hedge)
 {uint8_t i;
 
@@ -836,7 +946,10 @@ void startMarvelmindHedge (struct MarvelmindHedge * hedge)
     hedge->telemetry.updated= false;
     hedge->quality.updated= false;
 
-#ifdef WIN32
+    hedge->timeOffset= timezone_offset();
+    //printf("TZ= %d\r\n",(int) hedge->timeOffset);
+
+#if defined(WIN32) || defined(_WIN64)
     _beginthread (Marvelmind_Thread_, 0, hedge);
 #else
     pthread_create (&hedge->thread_, NULL, Marvelmind_Thread_, hedge);
@@ -855,10 +968,13 @@ static bool getPositionFromMarvelmindHedgeByAddress (struct MarvelmindHedge * he
     uint8_t i;
     int32_t avg_x=0, avg_y=0, avg_z=0;
     double avg_ang= 0.0;
-    uint32_t max_timestamp=0;
+    int64_t max_timestamp=0;
+    TimestampOpt max_timestamp_opt;
+    bool isRealTime= false;
     bool position_valid;
     bool highRes= false;
-#ifdef WIN32
+    uint8_t flags;
+#if defined(WIN32) || defined(_WIN64)
     EnterCriticalSection(&hedge->lock_);
 #else
     pthread_mutex_lock (&hedge->lock_);
@@ -888,8 +1004,21 @@ static bool getPositionFromMarvelmindHedgeByAddress (struct MarvelmindHedge * he
             if (hedge->positionBuffer[i].highResolution)
                 highRes= true;
             hedge->positionBuffer[i].processed= true;
-            if (hedge->positionBuffer[i].timestamp>max_timestamp)
-                max_timestamp=hedge->positionBuffer[i].timestamp;
+
+            int64_t curT;
+            if (hedge->positionBuffer[i].realTime) {
+                curT= hedge->positionBuffer[i].timestamp.timestamp64;
+                isRealTime= true;
+            } else {
+                curT= hedge->positionBuffer[i].timestamp.timestamp32;
+            }
+
+            if (curT>max_timestamp) {
+                max_timestamp=curT;
+                max_timestamp_opt= hedge->positionBuffer[i].timestamp;
+            }
+
+            flags= hedge->positionBuffer[i].flags;
         }
         if (nFound != 0)
         {
@@ -904,7 +1033,7 @@ static bool getPositionFromMarvelmindHedgeByAddress (struct MarvelmindHedge * he
         }
     }
     else position_valid=false;
-#ifdef WIN32
+#if defined(WIN32) || defined(_WIN64)
     LeaveCriticalSection(&hedge->lock_);
 #else
     pthread_mutex_unlock (&hedge->lock_);
@@ -914,9 +1043,11 @@ static bool getPositionFromMarvelmindHedgeByAddress (struct MarvelmindHedge * he
     position->y=avg_y;
     position->z=avg_z;
     position->angle= avg_ang;
-    position->timestamp=max_timestamp;
+    position->timestamp=max_timestamp_opt;
+    position->realTime= isRealTime;
     position->ready= position_valid;
     position->highResolution= highRes;
+    position->flags= flags;
     return position_valid;
 }
 
@@ -925,6 +1056,26 @@ bool getPositionFromMarvelmindHedge (struct MarvelmindHedge * hedge,
 {
     return getPositionFromMarvelmindHedgeByAddress(hedge, position, 0);
 };
+
+static void printRealtimeStamp(struct MarvelmindHedge * hedge, char *s, TimestampOpt timestamp, bool realTime) {
+    if (!realTime) {
+        sprintf(s, "%d", timestamp.timestamp32);
+    } else {
+        time_t time_sec= (timestamp.timestamp64 / 1000);
+        if (time_sec>hedge->timeOffset)
+            time_sec= time_sec - hedge->timeOffset;
+        int time_ms= timestamp.timestamp64 % 1000;
+
+        struct tm ts;
+        struct tm *tsptr;
+        tsptr= localtime(&time_sec);
+        if (tsptr == NULL) return;
+        ts= *tsptr;
+
+        sprintf(s,"%04d_%02d_%02d__%02d%02d%02d_%03d",
+                (int) ts.tm_year+1900, (int) ts.tm_mon+1, (int) ts.tm_mday, (int) ts.tm_hour, (int) ts.tm_min, (int) ts.tm_sec, (int) time_ms);
+    }
+}
 
 //////////////////////////////////////////////////////////////////////////////
 // Print average position coordinates
@@ -964,14 +1115,17 @@ void printPositionFromMarvelmindHedge (struct MarvelmindHedge * hedge,
             zm= ((double) position.z)/1000.0;
             if (position.ready)
             {
+                char times[128];
+                printRealtimeStamp(hedge, times, position.timestamp, position.realTime);
+
                 if (position.highResolution)
                 {
-                    printf ("Address: %d, X: %.3f, Y: %.3f, Z: %.3f, Angle: %.1f  at time T: %u\n",
-                            position.address, xm, ym, zm, position.angle, position.timestamp);
+                    printf ("Address: %d, X: %.3f, Y: %.3f, Z: %.3f, Angle: %.1f, Flags: %d  at time T: %s\n",
+                            position.address, xm, ym, zm, position.angle, position.flags, times);
                 } else
                 {
-                    printf ("Address: %d, X: %.2f, Y: %.2f, Z: %.2f, Angle: %.1f at time T: %u\n",
-                            position.address, xm, ym, zm, position.angle, position.timestamp);
+                    printf ("Address: %d, X: %.2f, Y: %.2f, Z: %.2f, Angle: %.1f, Flags: %d at time T: %s\n",
+                            position.address, xm, ym, zm, position.angle, position.flags, times);
                 }
             }
             hedge->haveNewValues_=false;
@@ -984,7 +1138,7 @@ void printPositionFromMarvelmindHedge (struct MarvelmindHedge * hedge,
 bool getStationaryBeaconsPositionsFromMarvelmindHedge (struct MarvelmindHedge * hedge,
                                               struct StationaryBeaconsPositions * positions)
 {
-#ifdef WIN32
+#if defined(WIN32) || defined(_WIN64)
     EnterCriticalSection(&hedge->lock_);
 #else
     pthread_mutex_lock (&hedge->lock_);
@@ -992,7 +1146,7 @@ bool getStationaryBeaconsPositionsFromMarvelmindHedge (struct MarvelmindHedge * 
 
     *positions= hedge->positionsBeacons;
 
-#ifdef WIN32
+#if defined(WIN32) || defined(_WIN64)
     LeaveCriticalSection(&hedge->lock_);
 #else
     pthread_mutex_unlock (&hedge->lock_);
@@ -1039,7 +1193,7 @@ void printStationaryBeaconsPositionsFromMarvelmindHedge (struct MarvelmindHedge 
 bool getRawDistancesFromMarvelmindHedge(struct MarvelmindHedge * hedge,
                                         struct RawDistances* rawDistances)
 {
-#ifdef WIN32
+#if defined(WIN32) || defined(_WIN64)
     EnterCriticalSection(&hedge->lock_);
 #else
     pthread_mutex_lock (&hedge->lock_);
@@ -1047,7 +1201,7 @@ bool getRawDistancesFromMarvelmindHedge(struct MarvelmindHedge * hedge,
 
     *rawDistances= hedge->rawDistances;
 
-#ifdef WIN32
+#if defined(WIN32) || defined(_WIN64)
     LeaveCriticalSection(&hedge->lock_);
 #else
     pthread_mutex_unlock (&hedge->lock_);
@@ -1072,12 +1226,16 @@ void printRawDistancesFromMarvelmindHedge(struct MarvelmindHedge * hedge,
 		  if (rawDistances.distances[i].address_beacon != 0)
 		  {
 		      d_m= rawDistances.distances[i].distance/1000.0;
-			  printf("Raw distance: %02d ==> %02d,  Distance= %.3f, Timestamp= %d, Time shift= %d \n",
-				(int) rawDistances.address_hedge,
-				(int) rawDistances.distances[i].address_beacon,
-                (float) d_m,
-                (int) rawDistances.timestamp,
-                (int) rawDistances.timeShift
+
+		      char times[128];
+		      printRealtimeStamp(hedge, times, rawDistances.timestamp, rawDistances.realTime);
+
+		      printf("Raw distance: %02d ==> %02d,  Distance= %.3f, Timestamp= %s, Time shift= %d \n",
+                    (int) rawDistances.address_hedge,
+                    (int) rawDistances.distances[i].address_beacon,
+                    (float) d_m,
+                    times,
+                    (int) rawDistances.timeShift
                 );
 		  }
 		}
@@ -1091,7 +1249,7 @@ void printRawDistancesFromMarvelmindHedge(struct MarvelmindHedge * hedge,
 bool getRawIMUFromMarvelmindHedge(struct MarvelmindHedge * hedge,
                                   struct RawIMUValue* rawIMU)
 {
-#ifdef WIN32
+#if defined(WIN32) || defined(_WIN64)
     EnterCriticalSection(&hedge->lock_);
 #else
     pthread_mutex_lock (&hedge->lock_);
@@ -1099,7 +1257,7 @@ bool getRawIMUFromMarvelmindHedge(struct MarvelmindHedge * hedge,
 
     *rawIMU= hedge->rawIMU;
 
-#ifdef WIN32
+#if defined(WIN32) || defined(_WIN64)
     LeaveCriticalSection(&hedge->lock_);
 #else
     pthread_mutex_unlock (&hedge->lock_);
@@ -1116,8 +1274,11 @@ void printRawIMUFromMarvelmindHedge(struct MarvelmindHedge * hedge,
 
    if (rawIMU.updated || (!onlyNew))
     {
-        printf("Raw IMU: Timestamp: %08d, aX=%05d aY=%05d aZ=%05d  gX=%05d gY=%05d gZ=%05d  cX=%05d cY=%05d cZ=%05d \n",
-				(int) rawIMU.timestamp,
+        char times[128];
+        printRealtimeStamp(hedge, times, rawIMU.timestamp, rawIMU.realTime);
+
+        printf("Raw IMU: Timestamp: %s, aX=%05d aY=%05d aZ=%05d  gX=%05d gY=%05d gZ=%05d  cX=%05d cY=%05d cZ=%05d \n",
+				times,
 				(int) rawIMU.acc_x, (int) rawIMU.acc_y, (int) rawIMU.acc_z,
 				(int) rawIMU.gyro_x, (int) rawIMU.gyro_y, (int) rawIMU.gyro_z,
 				(int) rawIMU.compass_x, (int) rawIMU.compass_y, (int) rawIMU.compass_z);
@@ -1131,7 +1292,7 @@ void printRawIMUFromMarvelmindHedge(struct MarvelmindHedge * hedge,
 bool getFusionIMUFromMarvelmindHedge(struct MarvelmindHedge * hedge,
                                      struct FusionIMUValue *fusionIMU)
 {
-#ifdef WIN32
+#if defined(WIN32) || defined(_WIN64)
     EnterCriticalSection(&hedge->lock_);
 #else
     pthread_mutex_lock (&hedge->lock_);
@@ -1139,7 +1300,7 @@ bool getFusionIMUFromMarvelmindHedge(struct MarvelmindHedge * hedge,
 
     *fusionIMU= hedge->fusionIMU;
 
-#ifdef WIN32
+#if defined(WIN32) || defined(_WIN64)
     LeaveCriticalSection(&hedge->lock_);
 #else
     pthread_mutex_unlock (&hedge->lock_);
@@ -1177,8 +1338,11 @@ void printFusionIMUFromMarvelmindHedge(struct MarvelmindHedge * hedge,
        ay= fusionIMU.ay/1000.0;
        az= fusionIMU.az/1000.0;
 
-       printf("IMU fusion: Timestamp: %08d, X=%.3f  Y= %.3f  Z=%.3f  q=%.3f,%.3f,%.3f,%.3f v=%.3f,%.3f,%.3f  a=%.3f,%.3f,%.3f \n",
-				(int) fusionIMU.timestamp,
+       char times[128];
+       printRealtimeStamp(hedge, times, fusionIMU.timestamp, fusionIMU.realTime);
+
+       printf("IMU fusion: Timestamp: %s, X=%.3f  Y= %.3f  Z=%.3f  q=%.3f,%.3f,%.3f,%.3f v=%.3f,%.3f,%.3f  a=%.3f,%.3f,%.3f \n",
+				times,
 				(float) x_m, (float) y_m, (float) z_m,
 				(float) qw, (float) qx, (float) qy, (float) qz,
 				(float) vx, (float) vy, (float) vz,
@@ -1193,7 +1357,7 @@ void printFusionIMUFromMarvelmindHedge(struct MarvelmindHedge * hedge,
 bool getTelemetryFromMarvelmindHedge(struct MarvelmindHedge * hedge,
                                      struct TelemetryData *telemetry)
 {
-#ifdef WIN32
+#if defined(WIN32) || defined(_WIN64)
     EnterCriticalSection(&hedge->lock_);
 #else
     pthread_mutex_lock (&hedge->lock_);
@@ -1201,7 +1365,7 @@ bool getTelemetryFromMarvelmindHedge(struct MarvelmindHedge * hedge,
 
     *telemetry= hedge->telemetry;
 
-#ifdef WIN32
+#if defined(WIN32) || defined(_WIN64)
     LeaveCriticalSection(&hedge->lock_);
 #else
     pthread_mutex_unlock (&hedge->lock_);
@@ -1229,7 +1393,7 @@ void printTelemetryFromMarvelmindHedge(struct MarvelmindHedge * hedge,
 bool getQualityFromMarvelmindHedge(struct MarvelmindHedge * hedge,
                                    struct QualityData *quality)
 {
-#ifdef WIN32
+#if defined(WIN32) || defined(_WIN64)
     EnterCriticalSection(&hedge->lock_);
 #else
     pthread_mutex_lock (&hedge->lock_);
@@ -1237,7 +1401,7 @@ bool getQualityFromMarvelmindHedge(struct MarvelmindHedge * hedge,
 
     *quality= hedge->quality;
 
-#ifdef WIN32
+#if defined(WIN32) || defined(_WIN64)
     LeaveCriticalSection(&hedge->lock_);
 #else
     pthread_mutex_unlock (&hedge->lock_);
@@ -1266,7 +1430,7 @@ void stopMarvelmindHedge (struct MarvelmindHedge * hedge)
 {
     hedge->terminationRequired=true;
     if (hedge->verbose) puts ("stopping");
-#ifdef WIN32
+#if defined(WIN32) || defined(_WIN64)
     WaitForSingleObject (hedge->thread_, INFINITE);
 #else
     pthread_join (hedge->thread_, NULL);

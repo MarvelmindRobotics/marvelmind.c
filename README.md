@@ -15,6 +15,13 @@ Archive contains a simple example of library usage (example.c).
 To build the example on GNU/Linux or another *nix-OS you need to have installed GCC. Then unpack the archive, change directory to unpacked library and run make in console. Then you can execute ./marvelmind_example to watch data from Marvelmind beacon being received. 
 
 If you want to build a project for MS Windows, you may use integrated development environment (such a MS Visual Studio, Code::Blocks etc.): create empty console project and add 3 source files (example.c, marvelmind.h, marvelmind.c) into the project and run build. You may need to change the project settings to successfully build it.
+<br />
+Notes about using the example: <br />
+1. You should achieve a good tracking before using the example. <br />
+Please refer to operating manual for details: [https://marvelmind.com/pics/marvelmind_navigation_system_manual.pdf](https://marvelmind.com/pics/marvelmind_navigation_system_manual.pdf) <br />
+2. When you finish build the map, you can disconnect modem from the PC and connect to any USB charger. 
+Then you can connect a mobile beacon to the PC for receiving location data. <br/>
+3. You should close the dashboard on the PC where you run the example, because dashboard and the example can't share the serial port.
 
 ### Command line options of the example ###
 
