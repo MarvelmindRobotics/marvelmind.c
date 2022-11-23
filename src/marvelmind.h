@@ -11,7 +11,7 @@
 #define _CRT_SECURE_NO_WARNINGS 1
 #pragma warning(disable:4996)
 #endif
-// ----- 
+// -----
 
 #define DATA_INPUT_SEMAPHORE "/mm_data_input_semaphore"
 
@@ -140,6 +140,16 @@ struct QualityData
     bool updated;
 };
 
+struct UserPayloadData
+{
+    TimestampOpt timestamp;
+
+    uint8_t data[256];
+    uint8_t dataSize;
+
+    bool updated;
+};
+
 #define MAX_BUFFERED_POSITIONS 1
 struct MarvelmindHedge
 {
@@ -165,6 +175,8 @@ struct MarvelmindHedge
 
     struct TelemetryData telemetry;
     struct QualityData quality;
+
+    struct UserPayloadData userPayloadData;
 
     int timeOffset;
 
@@ -209,6 +221,7 @@ struct MarvelmindHedge
 #define NT_BEACON_RAW_DISTANCE_DATAGRAM_ID 0x0084
 #define NT_IMU_FUSION_DATAGRAM_ID 0x0085
 #define WAYPOINT_DATAGRAM_ID 0x0201
+#define GENERIC_USER_DATA_DATAGRAM_ID 0x0280
 
 struct MarvelmindHedge * createMarvelmindHedge ();
 void destroyMarvelmindHedge (struct MarvelmindHedge * hedge);
@@ -248,6 +261,9 @@ bool getQualityFromMarvelmindHedge(struct MarvelmindHedge * hedge,
                                      struct QualityData *quality);
 void printQualityFromMarvelmindHedge(struct MarvelmindHedge * hedge,
                                       bool onlyNew);
+
+void printUserPayloadFromMarvelmindHedge(struct MarvelmindHedge * hedge,
+                                         bool onlyNew);
 
 void stopMarvelmindHedge (struct MarvelmindHedge * hedge);
 

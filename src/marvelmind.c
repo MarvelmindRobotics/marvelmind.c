@@ -625,10 +625,29 @@ static void process_quality_datagram(struct MarvelmindHedge * hedge, uint8_t *bu
 static void process_waypoint_data(struct MarvelmindHedge * hedge, uint8_t *buffer)
 {uint8_t i;
 
+   printf("Waypoint data: ");
    for(i=0;i<16;i++) {
     printf("%03d, ", buffer[i]);
    }
    printf("\n");
+}
+
+static void process_generic_user_data(struct MarvelmindHedge * hedge, uint8_t *buffer) {
+    uint8_t size= buffer[4];
+    uint8_t dsize;
+    uint8_t i;
+
+    if (size<=8) return;
+    dsize= size-8;
+
+    memcpy(&hedge->userPayloadData.timestamp.timestamp64, &buffer[5], 8);
+
+    hedge->userPayloadData.dataSize= dsize;
+    for(i=0;i<dsize;i++) {
+       hedge->userPayloadData.data[i]= buffer[5+8+i];
+    }
+
+    hedge->userPayloadData.updated= true;
 }
 
 ////////////////////////
@@ -659,6 +678,7 @@ Marvelmind_Thread_ (void* param)
     while (hedge->terminationRequired==false)
     {
         uint8_t receivedChar;
+        uint8_t packetType;
         bool readSuccessed=true;
 #if defined(WIN32) || defined(_WIN64)
         DWORD nBytesRead;
@@ -709,27 +729,35 @@ Marvelmind_Thread_ (void* param)
                         goodByte= (receivedChar == 0xff);
                         break;
                     case 1:
-                        goodByte= (receivedChar == 0x47) || (receivedChar == 0x4a);
+                        packetType= receivedChar;
+                        goodByte= (packetType == 0x47) || (packetType == 0x4a);
                         break;
                     case 2:
                         goodByte= true;
                         break;
                     case 3:
                         dataId= (((uint16_t) receivedChar)<<8) + input_buffer[2];
-                        goodByte=   (dataId == POSITION_DATAGRAM_ID) ||
-                                    (dataId == BEACONS_POSITIONS_DATAGRAM_ID) ||
-                                    (dataId == POSITION_DATAGRAM_HIGHRES_ID) ||
-                                    (dataId == BEACONS_POSITIONS_DATAGRAM_HIGHRES_ID) ||
-                                    (dataId == IMU_RAW_DATAGRAM_ID) ||
-                                    (dataId == IMU_FUSION_DATAGRAM_ID) ||
-                                    (dataId == BEACON_RAW_DISTANCE_DATAGRAM_ID) ||
-                                    (dataId == TELEMETRY_DATAGRAM_ID) ||
-                                    (dataId == QUALITY_DATAGRAM_ID) ||
-                                    (dataId == WAYPOINT_DATAGRAM_ID) ||
-                                    (dataId == NT_POSITION_DATAGRAM_HIGHRES_ID) ||
-                                    (dataId == NT_IMU_RAW_DATAGRAM_ID) ||
-                                    (dataId == NT_BEACON_RAW_DISTANCE_DATAGRAM_ID) ||
-                                    (dataId == NT_IMU_FUSION_DATAGRAM_ID);
+
+                        if (packetType == 0x47) {
+                            goodByte= (dataId == POSITION_DATAGRAM_ID) ||
+                                      (dataId == BEACONS_POSITIONS_DATAGRAM_ID) ||
+                                      (dataId == POSITION_DATAGRAM_HIGHRES_ID) ||
+                                      (dataId == BEACONS_POSITIONS_DATAGRAM_HIGHRES_ID) ||
+                                      (dataId == IMU_RAW_DATAGRAM_ID) ||
+                                      (dataId == IMU_FUSION_DATAGRAM_ID) ||
+                                      (dataId == BEACON_RAW_DISTANCE_DATAGRAM_ID) ||
+                                      (dataId == TELEMETRY_DATAGRAM_ID) ||
+                                      (dataId == QUALITY_DATAGRAM_ID) ||
+                                      (dataId == NT_POSITION_DATAGRAM_HIGHRES_ID) ||
+                                      (dataId == NT_IMU_RAW_DATAGRAM_ID) ||
+                                      (dataId == NT_BEACON_RAW_DISTANCE_DATAGRAM_ID) ||
+                                      (dataId == NT_IMU_FUSION_DATAGRAM_ID);
+                        } else if (packetType == 0x4a) {
+                            goodByte= (dataId == WAYPOINT_DATAGRAM_ID) ||
+                                      (dataId == GENERIC_USER_DATA_DATAGRAM_ID);
+                        } else {
+                            goodByte= false;
+                        }
                         break;
                     case 4:
                         switch(dataId )
@@ -766,6 +794,7 @@ Marvelmind_Thread_ (void* param)
                             case NT_IMU_RAW_DATAGRAM_ID:
                             case NT_BEACON_RAW_DISTANCE_DATAGRAM_ID:
                             case NT_IMU_FUSION_DATAGRAM_ID:
+                            case GENERIC_USER_DATA_DATAGRAM_ID:
                                 goodByte= true;
                                 break;
                         }
@@ -845,6 +874,9 @@ Marvelmind_Thread_ (void* param)
                             case WAYPOINT_DATAGRAM_ID:
                                 process_waypoint_data(hedge, input_buffer);
                                 break;
+                            case GENERIC_USER_DATA_DATAGRAM_ID:
+                                process_generic_user_data(hedge, input_buffer);
+                                break;
                         }
 #if defined(WIN32) || defined(_WIN64)
                         LeaveCriticalSection(&hedge->lock_);
@@ -900,6 +932,8 @@ struct MarvelmindHedge * createMarvelmindHedge ()
         hedge->rawIMU.updated= false;
         hedge->fusionIMU.updated= false;
         hedge->rawDistances.updated= false;
+
+        hedge->userPayloadData.updated= false;
 #if defined(WIN32) || defined(_WIN64)
         InitializeCriticalSection(&hedge->lock_);
 #else
@@ -1420,6 +1454,50 @@ void printQualityFromMarvelmindHedge(struct MarvelmindHedge * hedge,
         printf("Quality: Address= %d,  Q= %d %% \n", (int) quality.address, (int) quality.quality_per);
 
         hedge->quality.updated= false;
+    }
+}
+
+//////////
+
+bool getUserPayloadFromMarvelmindHedge(struct MarvelmindHedge * hedge,
+                                       struct UserPayloadData *upd)
+{
+#if defined(WIN32) || defined(_WIN64)
+    EnterCriticalSection(&hedge->lock_);
+#else
+    pthread_mutex_lock (&hedge->lock_);
+#endif
+
+    *upd= hedge->userPayloadData;
+
+#if defined(WIN32) || defined(_WIN64)
+    LeaveCriticalSection(&hedge->lock_);
+#else
+    pthread_mutex_unlock (&hedge->lock_);
+#endif
+
+    return true;
+}
+
+void printUserPayloadFromMarvelmindHedge(struct MarvelmindHedge * hedge,
+                                       bool onlyNew)
+{struct UserPayloadData upd;
+ int i;
+
+   getUserPayloadFromMarvelmindHedge(hedge, &upd);
+
+   if (upd.updated || (!onlyNew))
+    {
+        char times[128];
+        printRealtimeStamp(hedge, times, upd.timestamp, true);
+
+        printf("User payload: Timestamp: %s  ,   ", times);
+        for(i=0;i<upd.dataSize;i++) {
+            printf("%03d ", (int) upd.data[i]);
+        }
+        printf(" \n");
+
+        hedge->userPayloadData.updated= false;
     }
 }
 

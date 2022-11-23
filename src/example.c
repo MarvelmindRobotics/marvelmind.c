@@ -9,7 +9,7 @@
 #include <signal.h>
 #include <semaphore.h>
 #include <time.h>
-#endif 
+#endif
 #include "marvelmind.h"
 
 bool terminateProgram=false;
@@ -158,6 +158,7 @@ int main (int argc, char *argv[])
 
         printQualityFromMarvelmindHedge(hedge, true);
 
+        printUserPayloadFromMarvelmindHedge(hedge, true);
     }
 
     // Exit
