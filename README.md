@@ -2,7 +2,7 @@
 
 ### About the library ###
 
-Marvelmind C library provides an example of building the system for receiving coordinates from Marvelmind mobile beacons via virtual serial port by user’s software running on supported operating systems:
+Marvelmind C library provides an example of building the system for receiving location and other data from Marvelmind mobile beacons or modem via virtual serial port by user’s software running on supported operating systems:
 
 * Microsoft Windows
 * GNU/Linux (including Raspberry Pi)
@@ -12,7 +12,7 @@ Archive contains a simple example of library usage (example.c).
 
 ### Building the example ###
 
-To build the example on GNU/Linux or another *nix-OS you need to have installed GCC. Then unpack the archive, change directory to unpacked library and run make in console. Then you can execute ./marvelmind_example to watch data from Marvelmind beacon being received. 
+To build the example on GNU/Linux or another *nix-OS you need to have installed GCC. Then unpack the archive, change directory to unpacked library and run make in console. Then you can execute ./marvelmind_c to watch data from Marvelmind beacon (or modem) being received. 
 
 If you want to build a project for MS Windows, you may use integrated development environment (such a MS Visual Studio, Code::Blocks etc.): create empty console project and add 3 source files (example.c, marvelmind.h, marvelmind.c) into the project and run build. You may need to change the project settings to successfully build it.
 <br />
@@ -33,9 +33,9 @@ or for Microsoft Windows:
 
  *marvelmind_c.exe COM4*
 
-Use prefix \\.\ if serial port number is bigger than 9:
+Use prefix \\\\.\ if serial port number is bigger than 9:
 
- *marvelmind_c.exe \\.\COM10*
+ *marvelmind_c.exe \\\\.\COM10*
 
 ### Using the library ###
 
