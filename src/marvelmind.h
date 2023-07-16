@@ -41,6 +41,9 @@ struct PositionValue
 
     bool highResolution;
 
+    int16_t speed_x,speed_y,speed_z; // speed, mm/s
+    bool speedPresent;
+
     bool ready;
     bool processed;
 };

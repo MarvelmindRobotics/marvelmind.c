@@ -320,12 +320,14 @@ static struct PositionValue process_position_datagram(struct MarvelmindHedge * h
 
     hedge->positionBuffer[ind].highResolution= false;
 
+    hedge->positionBuffer[ind].speedPresent= false;
+
     ind= markPositionReady(hedge);
 
     return hedge->positionBuffer[ind];
 }
 
-static struct PositionValue process_position_highres_datagram_main(struct MarvelmindHedge * hedge, uint8_t *buffer, uint8_t ind) {
+static struct PositionValue process_position_highres_datagram_main(struct MarvelmindHedge * hedge, uint8_t *buffer, uint8_t ind, uint8_t dsize) {
     hedge->positionBuffer[ind].address=
         buffer[22];
 
@@ -355,6 +357,39 @@ static struct PositionValue process_position_highres_datagram_main(struct Marvel
 
     hedge->positionBuffer[ind].highResolution= true;
 
+    hedge->positionBuffer[ind].speedPresent= false;
+
+    if (dsize>27) {
+       dsize-= 27;
+       uint8_t ofs= 27;
+       while(dsize>0) {
+            uint8_t subCmd= buffer[ofs++];
+            dsize--;
+            bool knownCmd= false;
+            switch(subCmd) {
+                case 1: {
+                    // Speed
+                    hedge->positionBuffer[ind].speedPresent= true;
+                    knownCmd= true;
+
+                    hedge->positionBuffer[ind].speed_x= get_int16(&buffer[ofs+0]);
+                    hedge->positionBuffer[ind].speed_y= get_int16(&buffer[ofs+2]);
+                    hedge->positionBuffer[ind].speed_z= get_int16(&buffer[ofs+4]);
+                    ofs+= 6;
+                    dsize-= 6;
+                    break;
+                }
+
+                default: {
+                    break;
+                }
+            }
+
+            if (!knownCmd)
+                break;
+       }
+    }
+
     ind= markPositionReady(hedge);
 
     return hedge->positionBuffer[ind];
@@ -370,7 +405,7 @@ static struct PositionValue process_position_highres_datagram(struct MarvelmindH
         (((uint32_t ) buffer[8])<<24);
     hedge->positionBuffer[ind].realTime= false;
 
-    return process_position_highres_datagram_main(hedge, buffer, ind);
+    return process_position_highres_datagram_main(hedge, buffer, ind, buffer[4]);
 }
 
 static struct PositionValue process_nt_position_highres_datagram(struct MarvelmindHedge * hedge, uint8_t *buffer)
@@ -379,7 +414,7 @@ static struct PositionValue process_nt_position_highres_datagram(struct Marvelmi
     memcpy(&hedge->positionBuffer[ind].timestamp, &buffer[5], 8);
     hedge->positionBuffer[ind].realTime= true;
 
-    return process_position_highres_datagram_main(hedge, &buffer[4], ind);
+    return process_position_highres_datagram_main(hedge, &buffer[4], ind, buffer[4]);
 }
 
 static struct StationaryBeaconPosition *getOrAllocBeacon(struct MarvelmindHedge * hedge,uint8_t address)
@@ -1001,11 +1036,12 @@ static bool getPositionFromMarvelmindHedgeByAddress (struct MarvelmindHedge * he
 {
     uint8_t i;
     int32_t avg_x=0, avg_y=0, avg_z=0;
+    int32_t avg_vx=0, avg_vy=0, avg_vz=0;
     double avg_ang= 0.0;
     int64_t max_timestamp=0;
     TimestampOpt max_timestamp_opt;
     bool isRealTime= false;
-    bool position_valid;
+    bool position_valid, speed_valid;
     bool highRes= false;
     uint8_t flags;
 #if defined(WIN32) || defined(_WIN64)
@@ -1017,6 +1053,7 @@ static bool getPositionFromMarvelmindHedgeByAddress (struct MarvelmindHedge * he
     {
         uint8_t real_values_count= MAX_BUFFERED_POSITIONS;
         uint8_t nFound= 0;
+        uint8_t nFoundSpeed = 0;
         if (hedge->lastValuesCount_<real_values_count)
             real_values_count=hedge->lastValuesCount_;
         for (i=0; i<real_values_count; i++)
@@ -1038,6 +1075,13 @@ static bool getPositionFromMarvelmindHedgeByAddress (struct MarvelmindHedge * he
             if (hedge->positionBuffer[i].highResolution)
                 highRes= true;
             hedge->positionBuffer[i].processed= true;
+
+            if (hedge->positionBuffer[i].speedPresent) {
+               nFoundSpeed++;
+               avg_vx+=hedge->positionBuffer[i].speed_x;
+               avg_vy+=hedge->positionBuffer[i].speed_y;
+               avg_vz+=hedge->positionBuffer[i].speed_z;
+            }
 
             int64_t curT;
             if (hedge->positionBuffer[i].realTime) {
@@ -1065,6 +1109,17 @@ static bool getPositionFromMarvelmindHedgeByAddress (struct MarvelmindHedge * he
         {
             position_valid=false;
         }
+
+        if (nFoundSpeed != 0)
+        {
+            avg_vx/=nFoundSpeed;
+            avg_vy/=nFoundSpeed;
+            avg_vz/=nFoundSpeed;
+            speed_valid=true;
+        } else
+        {
+            speed_valid=false;
+        }
     }
     else position_valid=false;
 #if defined(WIN32) || defined(_WIN64)
@@ -1080,6 +1135,10 @@ static bool getPositionFromMarvelmindHedgeByAddress (struct MarvelmindHedge * he
     position->timestamp=max_timestamp_opt;
     position->realTime= isRealTime;
     position->ready= position_valid;
+    position->speedPresent= speed_valid;
+    position->speed_x= avg_vx;
+    position->speed_y= avg_vy;
+    position->speed_z= avg_vz;
     position->highResolution= highRes;
     position->flags= flags;
     return position_valid;
@@ -1119,6 +1178,7 @@ void printPositionFromMarvelmindHedge (struct MarvelmindHedge * hedge,
     bool onlyNew)
 {uint8_t i,j;
  double xm,ym,zm;
+ char times[128];
 
     if (hedge->haveNewValues_ || (!onlyNew))
     {
@@ -1149,7 +1209,6 @@ void printPositionFromMarvelmindHedge (struct MarvelmindHedge * hedge,
             zm= ((double) position.z)/1000.0;
             if (position.ready)
             {
-                char times[128];
                 printRealtimeStamp(hedge, times, position.timestamp, position.realTime);
 
                 if (position.highResolution)
@@ -1161,7 +1220,16 @@ void printPositionFromMarvelmindHedge (struct MarvelmindHedge * hedge,
                     printf ("Address: %d, X: %.2f, Y: %.2f, Z: %.2f, Angle: %.1f, Flags: %d at time T: %s\n",
                             position.address, xm, ym, zm, position.angle, position.flags, times);
                 }
+
+                if (position.speedPresent)
+                {
+                    double vx= ((double) position.speed_x)/1000.0;
+                    double vy= ((double) position.speed_y)/1000.0;
+                    double vz= ((double) position.speed_z)/1000.0;
+                    printf ("             Speed: VX: %.2f, VY: %.2f, VZ: %.2f  at time T: %s\n", vx, vy, vz, times);
+                }
             }
+
             hedge->haveNewValues_=false;
         }
     }
